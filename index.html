@@ -260,9 +260,7 @@ async function onQRCodeFound(qrStr){
       careOf: d.careOf || "", district: d.district || "", landmark: d.landmark || "",
       house: d.house || "", location: d.location || "", pincode: d.pincode || "",
       postOffice: d.postOffice || "", state: d.state || "", street: d.street || "",
-      subDistrict: d.subDistrict || "", vtc: d.vtc || "",
-      emailHashHex: parsed.emailHash ? bytesToHex(parsed.emailHash) : null,
-      mobileHashHex: parsed.mobileHash ? bytesToHex(parsed.mobileHash) : null,
+      subDistrict: d.subDistrict || "", vtc: d.vtc || ""
     };
     let text=""; for (const k of Object.keys(out)) text+=`${k}: ${out[k] ?? ""}\n`;
     outEl.textContent=text;
