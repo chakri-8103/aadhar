@@ -5,11 +5,16 @@
   <meta charset="utf-8" />
   <title>Aadhaar — QR Scanner & Decode</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <!-- Bootstrap CSS -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
   <style>
     body {
       font-family: system-ui, Segoe UI, Roboto, Arial;
       background: #f8f9fa;
+      margin: 0;
+      padding: 0;
     }
 
     .scanner-container {
@@ -19,16 +24,23 @@
       border-radius: 12px;
       overflow: hidden;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      display: none; /* hidden until Start Camera */
     }
 
     #video {
       width: 100%;
+      height: auto;
+      display: block;
       background: #000;
     }
 
+    /* Scanner overlay */
     .overlay {
       position: absolute;
-      inset: 0;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
       background: rgba(0, 0, 0, 0.4);
       display: flex;
       align-items: center;
@@ -40,6 +52,7 @@
       height: 250px;
       border: 3px solid #00ff99;
       border-radius: 8px;
+      box-shadow: 0 0 20px rgba(0, 255, 150, 0.6);
       animation: glow 1.5s infinite alternate;
     }
 
@@ -51,6 +64,10 @@
       to {
         box-shadow: 0 0 25px rgba(0, 255, 150, 0.9);
       }
+    }
+
+    #controls {
+      margin-top: 15px;
     }
 
     pre {
@@ -77,6 +94,8 @@
       background: #ef4444;
     }
   </style>
+
+  <!-- jsQR and pako -->
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
 </head>
@@ -85,7 +104,7 @@
 
   <h2 class="text-center mb-4">Aadhaar — QR Scanner & Decode</h2>
 
-  <div class="scanner-container">
+  <div class="scanner-container" id="scannerBox">
     <video id="video" autoplay playsinline></video>
     <div class="overlay">
       <div class="scanner-box"></div>
@@ -95,7 +114,7 @@
   <div id="controls" class="d-flex flex-wrap gap-2 justify-content-center">
     <button id="startBtn" class="btn btn-success">Start Camera</button>
     <button id="stopBtn" class="btn btn-danger" disabled>Stop Camera</button>
-    <button id="flashBtn" class="btn btn-warning" disabled>Flash Off</button>
+    <button id="flashBtn" class="btn btn-warning" disabled>Flash On</button>
     <input id="fileInput" type="file" accept="image/*" class="form-control" style="max-width:220px" />
     <button id="resetBtn" class="btn btn-secondary">Reset</button>
     <div class="ms-auto small mt-2">
@@ -108,14 +127,68 @@
   <div id="links" class="mt-2"></div>
 
   <script>
-    /* --- Helpers (same as before) --- */
-    function bigIntDecimalToBytes(decStr) { decStr = (decStr || "").replace(/\D/g, ''); if (!decStr) return new Uint8Array([]); const bi = BigInt(decStr); if (bi === 0n) return new Uint8Array([0]); let hex = bi.toString(16); if (hex.length % 2) hex = "0" + hex; const u8 = new Uint8Array(hex.length / 2); for (let i = 0; i < u8.length; i++) u8[i] = Number("0x" + hex.substr(i * 2, 2)); return u8; }
-    function bytesToHex(u8) { return Array.from(u8 || []).map(b => b.toString(16).padStart(2, "0")).join(""); }
-    function tryDecompress(u8) { try { return pako.ungzip(u8); } catch (e) { } try { return pako.inflate(u8); } catch (e) { } throw new Error("Decompress failed"); }
-    function splitUntilFF(u8, count) { const parts = []; let cursor = 0; for (let i = 0; i < count; i++) { const idx = u8.indexOf(0xFF, cursor); if (idx === -1) throw new Error("Missing 0xFF"); parts.push(u8.slice(cursor, idx)); cursor = idx + 1; } return { parts, cursor }; }
-    function parseUidaiBytes(decompressed) { const F17 = ["version", "presenceBit", "referenceId", "name", "dob", "gender", "careOf", "district", "landmark", "house", "location", "pincode", "postOffice", "state", "street", "subDistrict", "vtc"]; const F16 = ["presenceBit", "referenceId", "name", "dob", "gender", "careOf", "district", "landmark", "house", "location", "pincode", "postOffice", "state", "street", "subDistrict", "vtc"]; let partsInfo, ORDER; try { partsInfo = splitUntilFF(decompressed, F17.length); ORDER = F17; } catch (e) { partsInfo = splitUntilFF(decompressed, F16.length); ORDER = F16; } const td = new TextDecoder("iso-8859-1"); const parts = partsInfo.parts; const cursor = partsInfo.cursor; const values = parts.map((p, i) => i === 0 ? td.decode(p).trim() : td.decode(p)); const data = {}; ORDER.forEach((k, i) => data[k] = values[i] ?? ""); const SIGN_LEN = 256; const sigStart = decompressed.length - SIGN_LEN; if (sigStart <= cursor) throw new Error("Malformed bytes"); let trailerEnd = sigStart; let mobileHash = null, emailHash = null; const pres = Number(data.presenceBit || 0); if (pres === 3) { mobileHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32; emailHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32; } else if (pres === 2) { mobileHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32; } else if (pres === 1) { emailHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32; } const photoBytes = decompressed.slice(cursor, trailerEnd); return { data, emailHash, mobileHash, signatureLen: SIGN_LEN, photoBytes }; }
+    /* ---------- Helpers ---------- */
+    function bigIntDecimalToBytes(decStr) {
+      decStr = (decStr || "").replace(/\D/g, '');
+      if (!decStr) return new Uint8Array([]);
+      const bi = BigInt(decStr);
+      if (bi === 0n) return new Uint8Array([0]);
+      let hex = bi.toString(16);
+      if (hex.length % 2) hex = "0" + hex;
+      const u8 = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < u8.length; i++) u8[i] = Number("0x" + hex.substr(i * 2, 2));
+      return u8;
+    }
+    function tryDecompress(u8) {
+      try { return pako.ungzip(u8); } catch (e) { }
+      try { return pako.inflate(u8); } catch (e) { }
+      throw new Error("Decompress failed (not gzip/zlib).");
+    }
+    function splitUntilFF(u8, count) {
+      const parts = []; let cursor = 0;
+      for (let i = 0; i < count; i++) {
+        const idx = u8.indexOf(0xFF, cursor);
+        if (idx === -1) throw new Error("Missing 0xFF delimiters while parsing text fields");
+        parts.push(u8.slice(cursor, idx));
+        cursor = idx + 1;
+      }
+      return { parts, cursor };
+    }
+    function parseUidaiBytes(decompressed) {
+      const FIELD_17 = ["version", "presenceBit", "referenceId", "name", "dob", "gender", "careOf", "district", "landmark", "house", "location", "pincode", "postOffice", "state", "street", "subDistrict", "vtc"];
+      const FIELD_16 = ["presenceBit", "referenceId", "name", "dob", "gender", "careOf", "district", "landmark", "house", "location", "pincode", "postOffice", "state", "street", "subDistrict", "vtc"];
+      let partsInfo, FIELD_ORDER;
+      try {
+        partsInfo = splitUntilFF(decompressed, FIELD_17.length);
+        FIELD_ORDER = FIELD_17;
+      } catch (e) {
+        partsInfo = splitUntilFF(decompressed, FIELD_16.length);
+        FIELD_ORDER = FIELD_16;
+      }
+      const td = new TextDecoder("iso-8859-1");
+      const parts = partsInfo.parts;
+      const cursor = partsInfo.cursor;
+      const values = parts.map((p, i) => i === 0 ? td.decode(p).trim() : td.decode(p));
+      const data = {}; FIELD_ORDER.forEach((k, i) => data[k] = values[i] ?? "");
+      const SIGN_LEN = 256;
+      const sigStart = decompressed.length - SIGN_LEN;
+      if (sigStart <= cursor) throw new Error("Malformed bytes: signature overlaps content");
+      let trailerEnd = sigStart;
+      let mobileHash = null, emailHash = null;
+      const pres = Number(data.presenceBit || 0);
+      if (pres === 3) {
+        mobileHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32;
+        emailHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32;
+      } else if (pres === 2) {
+        mobileHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32;
+      } else if (pres === 1) {
+        emailHash = decompressed.slice(trailerEnd - 32, trailerEnd); trailerEnd -= 32;
+      }
+      const photoBytes = decompressed.slice(cursor, trailerEnd);
+      return { data, emailHash, mobileHash, signatureLen: SIGN_LEN, photoBytes };
+    }
 
-    /* --- Camera / scanning --- */
+    /* ---------- Camera / scanning ---------- */
     const video = document.getElementById("video");
     const startBtn = document.getElementById("startBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -126,57 +199,142 @@
     const statusDot = document.getElementById("statusDot");
     const links = document.getElementById("links");
     const fileInput = document.getElementById("fileInput");
+    const scannerBox = document.getElementById("scannerBox");
 
-    let stream = null, scanning = false, scanLoopHandle = null, videoTrack = null, torchOn = false;
+    let stream = null, scanning = false, scanLoopHandle = null, track = null, torchOn = false;
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
 
-    function setStatus(s, ok) { statusText.textContent = s; statusDot.className = "dot " + (ok ? "ok" : "bad"); }
+    function setStatus(s, ok) {
+      statusText.textContent = s;
+      statusDot.className = "dot " + (ok ? "ok" : "bad");
+    }
 
     async function startCamera() {
       if (stream) return;
       try {
-        // reset output when camera starts
-        outEl.textContent = "(no output yet)"; links.innerHTML = ""; setStatus("starting camera...", true);
-
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 1.777 } },
+          video: {
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            aspectRatio: { ideal: 1.777 }
+          },
           audio: false
         });
+        scannerBox.style.display = "block"; // show video only now
         video.srcObject = stream;
-        videoTrack = stream.getVideoTracks()[0];
         await video.play();
+        track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities();
+        if (caps.torch) flashBtn.disabled = false;
         setStatus("camera started", true);
-        startBtn.disabled = true; stopBtn.disabled = false; flashBtn.disabled = false;
-        scanning = true; scanLoop();
-      } catch (e) { setStatus("camera error", false); alert("Camera start failed: " + e.message); }
+        startBtn.disabled = true; stopBtn.disabled = false;
+        scanning = true;
+        scanLoop();
+      } catch (e) {
+        setStatus("camera error", false);
+        alert("Camera start failed: " + e.message);
+      }
     }
     function stopCamera() {
       scanning = false;
       if (scanLoopHandle) { cancelAnimationFrame(scanLoopHandle); scanLoopHandle = null; }
       if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-      video.pause(); video.srcObject = null; videoTrack = null;
-      torchOn = false; flashBtn.textContent = "Flash Off"; flashBtn.disabled = true;
-      startBtn.disabled = false; stopBtn.disabled = true;
+      video.pause(); video.srcObject = null;
+      scannerBox.style.display = "none"; // hide again
+      startBtn.disabled = false; stopBtn.disabled = true; flashBtn.disabled = true;
+      torchOn = false;
       setStatus("camera stopped", false);
-    }
-    async function toggleFlash() {
-      if (!videoTrack) return;
-      try {
-        torchOn = !torchOn;
-        await videoTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
-        flashBtn.textContent = torchOn ? "Flash On" : "Flash Off";
-      } catch (e) { alert("Torch not supported on this device/browser."); }
     }
     startBtn.addEventListener("click", startCamera);
     stopBtn.addEventListener("click", stopCamera);
-    flashBtn.addEventListener("click", toggleFlash);
     resetBtn.addEventListener("click", () => { outEl.textContent = "(no output yet)"; links.innerHTML = ""; setStatus("idle", false); });
 
-    /* scanLoop + decode same as before */
-    async function scanLoop() { if (!scanning) return; if (video.readyState === video.HAVE_ENOUGH_DATA) { canvas.width = video.videoWidth; canvas.height = video.videoHeight; ctx.drawImage(video, 0, 0, canvas.width, canvas.height); const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height); const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" }); if (code && code.data) { await onQRCodeFound(code.data); return; } else setStatus("scanning...", true); } scanLoopHandle = requestAnimationFrame(scanLoop); }
-    async function onQRCodeFound(qrStr) { setStatus("QR found — decoding...", true); scanning = false; if (scanLoopHandle) { cancelAnimationFrame(scanLoopHandle); scanLoopHandle = null; } if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; video.pause(); video.srcObject = null; videoTrack = null; } startBtn.disabled = false; stopBtn.disabled = true; flashBtn.disabled = true; torchOn = false; try { const numeric = (qrStr.match(/[0-9]+/g) || []).join(""); if (!numeric) throw new Error("No numeric content found"); const raw = bigIntDecimalToBytes(numeric); const decompressed = tryDecompress(raw); const parsed = parseUidaiBytes(decompressed); const d = parsed.data; const out = { name: d.name || "", dob: d.dob || "", gender: d.gender || "", careOf: d.careOf || "", district: d.district || "", landmark: d.landmark || "", house: d.house || "", location: d.location || "", pincode: d.pincode || "", postOffice: d.postOffice || "", state: d.state || "", street: d.street || "", vtc: d.vtc || "" }; let text = ""; for (const k of Object.keys(out)) text += `${k}: ${out[k] ?? ""}\n`; outEl.textContent = text; const jsonBlob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" }); const jurl = URL.createObjectURL(jsonBlob); const jlink = document.createElement("a"); jlink.href = jurl; jlink.download = "aadhaar_decoded.json"; jlink.textContent = "Download JSON"; jlink.className = "btn btn-link"; links.appendChild(jlink); if (parsed.photoBytes && parsed.photoBytes.length > 0) { const blob = new Blob([parsed.photoBytes], { type: "image/jp2" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "aadhaar_photo.jp2"; a.textContent = "Download Photo"; a.className = "btn btn-link"; links.appendChild(a); } setStatus("decoded successfully", true); } catch (err) { outEl.textContent = "Error: " + (err.message || String(err)); setStatus("decode error", false); } }
+    flashBtn.addEventListener("click", async () => {
+      if (!track) return;
+      try {
+        torchOn = !torchOn;
+        await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+        flashBtn.textContent = torchOn ? "Flash Off" : "Flash On";
+      } catch (e) {
+        alert("Flash not supported: " + e.message);
+      }
+    });
+
+    fileInput.addEventListener("change", async (ev) => {
+      if (!ev.target.files || !ev.target.files[0]) return;
+      const f = ev.target.files[0];
+      const img = new Image();
+      img.onload = async () => {
+        canvas.width = img.width; canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imgData.data, imgData.width, imgData.height);
+        if (code && code.data) { await onQRCodeFound(code.data); }
+        else { alert("No QR detected in image."); }
+      };
+      img.src = URL.createObjectURL(f);
+    });
+
+    async function scanLoop() {
+      if (!scanning) return;
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
+        if (code && code.data) { await onQRCodeFound(code.data); return; }
+        else { setStatus("scanning...", true); }
+      }
+      scanLoopHandle = requestAnimationFrame(scanLoop);
+    }
+
+    async function onQRCodeFound(qrStr) {
+      setStatus("QR found — decoding...", true);
+      scanning = false;
+      if (scanLoopHandle) { cancelAnimationFrame(scanLoopHandle); scanLoopHandle = null; }
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; video.pause(); video.srcObject = null; }
+      scannerBox.style.display = "none"; // hide video after scan
+      startBtn.disabled = false; stopBtn.disabled = true; flashBtn.disabled = true;
+      torchOn = false;
+      try {
+        const numeric = (qrStr.match(/[0-9]+/g) || []).join("");
+        if (!numeric) throw new Error("No numeric content found in QR");
+        const raw = bigIntDecimalToBytes(numeric);
+        const decompressed = tryDecompress(raw);
+        const parsed = parseUidaiBytes(decompressed);
+        const d = parsed.data;
+        const out = {
+          name: d.name || "", dob: d.dob || "", gender: d.gender || "", careOf: d.careOf || "",
+          district: d.district || "", landmark: d.landmark || "", house: d.house || "",
+          location: d.location || "", pincode: d.pincode || "", postOffice: d.postOffice || "",
+          state: d.state || "", street: d.street || "", vtc: d.vtc || ""
+        };
+        let text = ""; for (const k of Object.keys(out)) text += `${k}: ${out[k] ?? ""}\n`;
+        outEl.textContent = text;
+        const jsonBlob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+        const jurl = URL.createObjectURL(jsonBlob);
+        const jlink = document.createElement("a");
+        jlink.href = jurl; jlink.download = "aadhaar_decoded.json"; jlink.textContent = "Download JSON"; jlink.className = "btn btn-link";
+        links.appendChild(jlink);
+        if (parsed.photoBytes && parsed.photoBytes.length > 0) {
+          const blob = new Blob([parsed.photoBytes], { type: "image/jp2" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "aadhaar_photo.jp2"; a.textContent = "Download Photo"; a.className = "btn btn-link";
+          links.appendChild(a);
+        }
+        setStatus("decoded successfully", true);
+      } catch (err) {
+        outEl.textContent = "Error: " + (err.message || String(err));
+        setStatus("decode error", false);
+      }
+    }
   </script>
+
+  <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 
