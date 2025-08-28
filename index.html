@@ -26,7 +26,7 @@
     #video {
       width: 100%;
       height: auto;
-      display: none; /* hide initially */
+      display: none;
       background: #000;
     }
 
@@ -49,30 +49,13 @@
     }
 
     @keyframes glow {
-      from {
-        box-shadow: 0 0 10px rgba(0, 255, 150, 0.5);
-      }
-
-      to {
-        box-shadow: 0 0 25px rgba(0, 255, 150, 0.9);
-      }
+      from { box-shadow: 0 0 10px rgba(0, 255, 150, 0.5); }
+      to { box-shadow: 0 0 25px rgba(0, 255, 150, 0.9); }
     }
 
-    .dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      display: inline-block;
-      margin-left: 6px;
-    }
-
-    .ok {
-      background: #16a34a;
-    }
-
-    .bad {
-      background: #ef4444;
-    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: 6px; }
+    .ok { background: #16a34a; }
+    .bad { background: #ef4444; }
 
     .decoded-card {
       margin-top: 20px;
@@ -204,7 +187,14 @@
     async function startCamera() {
       if (stream) return;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
+          audio: false
+        });
         video.srcObject = stream;
         video.style.display = "block";
         await video.play();
@@ -292,8 +282,27 @@
 
     startBtn.addEventListener("click", startCamera);
     stopBtn.addEventListener("click", stopCamera);
-    resetBtn.addEventListener("click", () => { firstWord.textContent = "(no output yet)"; outTable.innerHTML = ""; links.innerHTML = ""; decodedCard.classList.add("d-none"); setStatus("idle", false); });
-    fileInput.addEventListener("change", async ev => { if (!ev.target.files || !ev.target.files[0]) return; const img = new Image(); img.onload = async () => { canvas.width = img.width; canvas.height = img.height; ctx.drawImage(img, 0, 0); const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height); if (code && code.data) await onQRCodeFound(code.data); else alert("No QR detected in image."); }; img.src = URL.createObjectURL(ev.target.files[0]); });
+    resetBtn.addEventListener("click", () => {
+      firstWord.textContent = "(no output yet)";
+      outTable.innerHTML = "";
+      links.innerHTML = "";
+      decodedCard.classList.add("d-none");
+      setStatus("idle", false);
+    });
+
+    fileInput.addEventListener("change", async ev => {
+      if (!ev.target.files || !ev.target.files[0]) return;
+      const img = new Image();
+      img.onload = async () => {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        const code = jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+        if (code && code.data) await onQRCodeFound(code.data);
+        else alert("No QR detected in image.");
+      };
+      img.src = URL.createObjectURL(ev.target.files[0]);
+    });
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
